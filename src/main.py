@@ -252,115 +252,102 @@ async def enhance_comment_endpoint(
         user_prompt_template=prompt_template_to_use
     )
 
-    ai_edit_status = "suggested"
+    enhancement_log_status = "suggested"
     error_message_for_db = None
 
     if enhanced_text is None:
-        # AI call failed or content blocked. ai_services logs the specific reason.
-        ai_edit_status = "api_error" # Or more specific if ai_services provides it
-        # We could try to get a more specific error message from ai_services if it were structured to return one
-        # For now, we'll rely on its logs.
-        # Fallback: Raise 503, after logging the attempt
-        error_message_for_db = "AI service failed or content was blocked." # Generic message for DB log
+        enhancement_log_status = "api_error"
+        error_message_for_db = "AI service failed or content was blocked."
 
-    # Log the attempt in ai_comment_edits table
-    # Determine the actual prompt used for logging
     actual_prompt_logged = ""
     if prompt_template_to_use:
         actual_prompt_logged = prompt_template_to_use.format(comment=text_to_enhance)
     else:
-        # Reconstruct or fetch default prompt from ai_services if possible, or use a placeholder
         actual_prompt_logged = f"Default prompt for: \"{text_to_enhance[:100]}...\""
 
-
-    ai_edit_db_input = schemas.AICommentEditDBInput(
+    log_db_input = schemas.AIEnhancementLogDBInput(
         comment_id=comment_id,
         user_id=current_user.user_id,
         raw_comment_text_before_ai=text_to_enhance,
         ai_prompt_used=actual_prompt_logged,
-        ai_generated_text=enhanced_text if enhanced_text else "", # Store empty string if None
-        status=ai_edit_status,
-        ai_model_used=ai_services.MODEL_NAME, # Get model name from ai_services
-        api_error_message=error_message_for_db if ai_edit_status != "suggested" else None
+        ai_generated_text=enhanced_text if enhanced_text else "",
+        status=enhancement_log_status,
+        ai_model_used=ai_services.MODEL_NAME,
+        api_error_message=error_message_for_db if enhancement_log_status != "suggested" else None
     )
 
     try:
-        created_ai_edit = crud.create_ai_comment_edit(db, ai_edit_db_input)
-    except ValueError as e: # From validation inside create_ai_comment_edit
+        created_log_entry = crud.create_ai_enhancement_log(db, log_db_input)
+    except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    if ai_edit_status != "suggested":
+    if enhancement_log_status != "suggested":
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=error_message_for_db)
 
     return schemas.EnhanceCommentResponse(
-        suggestion_id=created_ai_edit.edit_id,
+        suggestion_id=created_log_entry.log_id, # Use log_id
         comment_id=comment_id,
-        original_text=text_to_enhance, # original text of the comment
-        suggested_enhanced_text=enhanced_text, # the AI's suggestion
-        status=created_ai_edit.status # should be "suggested"
+        original_text=text_to_enhance,
+        suggested_enhanced_text=enhanced_text,
+        status=created_log_entry.status
     )
 
-@app.put("/ai-suggestions/{suggestion_id}/review", response_model=schemas.CommentReadAPI)
+@app.put("/ai-enhancement-logs/{log_id}/review", response_model=schemas.CommentReadAPI) # Path updated
 async def review_ai_enhancement_endpoint(
-    suggestion_id: int,
+    log_id: int, # Changed from suggestion_id to log_id
     review_data: schemas.ReviewEnhancementRequest,
     db: DBSession = Depends(get_session),
     current_user: CurrentUser = Depends(get_current_active_user)
 ):
-    ai_edit_record = crud.get_ai_comment_edit(db, edit_id=suggestion_id)
+    enhancement_log_record = crud.get_ai_enhancement_log(db, log_id=log_id)
 
-    if not ai_edit_record:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI suggestion not found.")
+    if not enhancement_log_record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI enhancement log not found.")
 
-    # Fetch the associated comment
-    db_comment = crud.get_comment(db, comment_id=ai_edit_record.comment_id)
-    if not db_comment: # Should not happen if DB integrity is maintained
+    db_comment = crud.get_comment(db, comment_id=enhancement_log_record.comment_id)
+    if not db_comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated comment not found.")
     if db_comment.is_deleted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot review suggestion for a deleted comment.")
 
-    # Authorization: Ensure current user is the author of the comment
     if db_comment.user_id != current_user.user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to review this AI suggestion.")
 
-    # Ensure the suggestion is in a reviewable state (e.g., 'suggested')
-    if ai_edit_record.status != "suggested":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"This AI suggestion has already been actioned with status: {ai_edit_record.status}.")
+    if enhancement_log_record.status != "suggested":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"This AI suggestion (log ID: {log_id}) has already been actioned with status: {enhancement_log_record.status}.")
 
     new_status = ""
-    user_final_text_for_edit_log = None
+    user_final_text_for_log = None
+    text_to_validate = ""
 
     if review_data.action == "accept_as_is":
-        db_comment.displayed_text = ai_edit_record.ai_generated_text
+        text_to_validate = enhancement_log_record.ai_generated_text
+        if len(text_to_validate) > settings.MAX_COMMENT_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"AI generated text exceeds maximum comment length of {settings.MAX_COMMENT_LENGTH} characters."
+            )
+        db_comment.displayed_text = text_to_validate
         db_comment.is_ai_assisted = True
         new_status = "accepted_as_is"
 
     elif review_data.action == "edit_and_accept":
         if not review_data.edited_text or not review_data.edited_text.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Edited text cannot be empty for 'edit_and_accept' action.")
-        db_comment.displayed_text = review_data.edited_text
-        db_comment.is_ai_assisted = True # Still AI-influenced
+
+        text_to_validate = review_data.edited_text
+        if len(text_to_validate) > settings.MAX_COMMENT_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Your edited text exceeds maximum comment length of {settings.MAX_COMMENT_LENGTH} characters."
+            )
+        db_comment.displayed_text = text_to_validate
+        db_comment.is_ai_assisted = True
         new_status = "edited_and_accepted"
-        user_final_text_for_edit_log = review_data.edited_text
+        user_final_text_for_log = review_data.edited_text
 
     elif review_data.action == "reject":
-        # If rejected, revert displayed_text to original_text.
-        # Or, if multiple edits possible, revert to previous displayed_text?
-        # For simplicity, current model is: reject reverts to original.
-        if db_comment.displayed_text != db_comment.original_text and db_comment.is_ai_assisted:
-             # Only revert if currently displaying an AI text.
-             # If user manually edited comment after an AI suggestion was accepted,
-             # and then calls "Enhance" again, then rejects *that new* suggestion,
-             # displayed_text should remain as their last manual edit, not original_text.
-             # This logic needs careful consideration of state.
-             # Current: if is_ai_assisted is true, means displayed_text is from AI. Rejecting it means reverting to original.
-             pass # See below modification to displayed_text handling for reject
-
-        # If user rejects, should displayed_text revert to original_text or last non-AI state?
-        # For now, let's assume if they reject an AI suggestion, they want their original input for that comment.
-        # If comment.is_ai_assisted was true, and they reject, it means the current displayed_text *was* an AI text.
-        # So, revert to original_text and mark is_ai_assisted as false.
-        if db_comment.is_ai_assisted: # Only change if it was AI assisted
+        if db_comment.is_ai_assisted:
             db_comment.displayed_text = db_comment.original_text
             db_comment.is_ai_assisted = False
         new_status = "rejected"
@@ -368,27 +355,22 @@ async def review_ai_enhancement_endpoint(
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid review action.")
 
-    # Update the comment itself
     db.add(db_comment)
-    # db.commit() # Commit along with AI edit status update or separately
 
-    # Update the AICommentEdit record status
-    updated_ai_edit = crud.update_ai_comment_edit_status(
+    updated_log_entry = crud.update_ai_enhancement_log_status(
         db,
-        edit_id=suggestion_id,
+        log_id=log_id,
         status=new_status,
-        user_final_text=user_final_text_for_edit_log
+        user_final_text=user_final_text_for_log
     )
-    if not updated_ai_edit:
-        # This would be an internal error if the record disappeared or failed to update
-        db.rollback() # Rollback comment changes if AI edit log fails
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update AI suggestion status.")
+    if not updated_log_entry:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update AI enhancement log status.")
 
-    db.commit() # Commit both comment and AI edit log changes
+    db.commit()
     db.refresh(db_comment)
-    # db.refresh(updated_ai_edit) # Already refreshed in crud
 
-    return get_comment_api_representation(db_comment, db) # Return the updated comment view
+    return get_comment_api_representation(db_comment, db)
 
 
 # To run the app (from project root):

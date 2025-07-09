@@ -43,18 +43,18 @@ Stores individual comments, linking them to users and videos. It holds both the 
 -   `updated_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP
 -   `is_deleted`: BOOLEAN, DEFAULT FALSE, NOT NULL (For soft deletes)
 
-### 4. `ai_comment_edits` Table
+### 4. `AIEnhancementLog` Table (formerly `ai_comment_edits`)
 
 Logs each instance of AI enhancement for auditing, troubleshooting, and managing the review flow.
 
--   `edit_id`: INTEGER, PRIMARY KEY, AUTOINCREMENT
+-   `log_id`: INTEGER, PRIMARY KEY, AUTOINCREMENT (formerly `edit_id`)
 -   `comment_id`: INTEGER, FOREIGN KEY REFERENCES `comments(comment_id)`, NOT NULL
--   `user_id`: INTEGER, FOREIGN KEY REFERENCES `users(user_id)`, NOT NULL (User who initiated the AI enhancement)
--   `raw_comment_text_before_ai`: TEXT, NOT NULL (The text that was sent to the AI for this specific edit attempt)
+-   `user_id`: INTEGER, FOREIGN KEY REFERENCES `users(user_id)`, NOT NULL (User who authored the original comment)
+-   `raw_comment_text_before_ai`: TEXT, NOT NULL (The text that was sent to the AI for this specific enhancement attempt)
 -   `ai_prompt_used`: TEXT (Optional, if a more complex prompt than just the raw comment is constructed)
 -   `ai_generated_text`: TEXT, NOT NULL (The direct output from the AI model)
 -   `user_final_edited_text`: TEXT (If the user further edits the AI suggestion before posting. `NULL` if accepted as-is or rejected.)
--   `status`: VARCHAR(50) NOT NULL (e.g., 'suggested', 'accepted_as_is', 'edited_and_accepted', 'rejected', 'api_error', 'cancelled_by_user')
+-   `status`: VARCHAR(50) NOT NULL (e.g., 'suggested', 'accepted_as_is', 'edited_and_accepted', 'rejected', 'api_error', 'length_error', 'cancelled_by_user')
 -   `ai_model_used`: VARCHAR(100) (e.g., 'Gemini-Pro-1.0')
 -   `api_call_timestamp`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP
 -   `api_error_message`: TEXT (If an error occurred during the API call)
@@ -65,7 +65,7 @@ Logs each instance of AI enhancement for auditing, troubleshooting, and managing
 -   A `video` can have many `comments`.
 -   Each `comment` is authored by one `user` and is associated with one `video`.
 -   A `comment` can be a reply to another `comment` (self-referencing `parent_comment_id`).
--   Each time a comment undergoes AI enhancement (or an attempt is made), a record is created in `ai_comment_edits` linked to the parent `comment`.
+-   Each time a comment undergoes AI enhancement (or an attempt is made), a record is created in `AIEnhancementLog` linked to the parent `comment`.
 
 ## Notes on Specific Fields:
 
@@ -77,6 +77,6 @@ Logs each instance of AI enhancement for auditing, troubleshooting, and managing
     -   If a user has `ai_assist_enabled_global = TRUE`, they might still choose to disable AI for a *specific* comment (setting this to `FALSE`).
     -   If a user has `ai_assist_enabled_global = FALSE`, they can use the "Enhance via AI" button for a *specific* comment (setting this to `TRUE` for that comment).
     -   If `NULL`, the behavior defaults to the global setting or the state before an explicit per-comment action.
--   **`ai_comment_edits.status`**: Tracks the lifecycle of an AI suggestion (e.g. whether the user accepted, edited, or rejected the AI's output). This is crucial for the UI flow and for understanding feature usage.
+-   **`AIEnhancementLog.status`** (formerly `ai_comment_edits.status`): Tracks the lifecycle of an AI suggestion (e.g. whether the user accepted, edited, or rejected the AI's output). This is crucial for the UI flow and for understanding feature usage.
 
 This schema is designed to be flexible and provide a good audit trail for the AI-assisted commenting feature. It will be translated into specific ORM models or SQL `CREATE TABLE` statements during implementation.

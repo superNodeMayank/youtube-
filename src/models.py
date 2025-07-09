@@ -89,58 +89,44 @@ class CommentRead(CommentBase):
     created_at: datetime
     updated_at: datetime
     author: UserRead # Nested UserRead schema for author details
+    enhancement_logs: List["AIEnhancementLog"] = Relationship(back_populates="comment")
     # replies: List["CommentReadAPI"] = [] # This is defined in schemas.py, careful with circular deps if used here.
 
-# --- AICommentEdit Model ---
-# As per docs/database_schema.md
-class AICommentEditBase(SQLModel):
+# --- AIEnhancementLog Model ---
+class AIEnhancementLogBase(SQLModel):
     raw_comment_text_before_ai: str
     ai_prompt_used: Optional[str] = None
     ai_generated_text: str
-    user_final_edited_text: Optional[str] = None
-    status: str = Field(index=True) # e.g., 'suggested', 'accepted_as_is', 'edited_and_accepted', 'rejected', 'api_error'
+    user_final_edited_text: Optional[str] = None # If user edited AI suggestion
+    status: str = Field(index=True) # e.g., 'suggested', 'accepted_as_is', 'edited_and_accepted', 'rejected', 'api_error', 'length_error'
     ai_model_used: Optional[str] = None
     api_error_message: Optional[str] = None
 
-class AICommentEdit(AICommentEditBase, table=True):
-    edit_id: Optional[int] = Field(default=None, primary_key=True)
+class AIEnhancementLog(AIEnhancementLogBase, table=True):
+    log_id: Optional[int] = Field(default=None, primary_key=True) # Renamed from edit_id
     comment_id: int = Field(foreign_key="comment.comment_id", index=True)
-    user_id: int = Field(foreign_key="user.user_id", index=True) # User who initiated/owns the comment
+    user_id: int = Field(foreign_key="user.user_id", index=True) # User who authored the comment
     api_call_timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    comment: "Comment" = Relationship(back_populates="ai_edits")
-    user: User = Relationship() # No back_populates for user on this table by default unless specified
+    comment: "Comment" = Relationship(back_populates="enhancement_logs")
+    user: User = Relationship() # No back_populates specified on User side
 
-# Update User model to link to AICommentEdits if needed for querying user's AI interactions
-# For now, not adding back_populates on User for AICommentEdit to keep it simple.
-
-# Update Comment model to link to its AICommentEdits.
-# This should be defined within the Comment class or after it if using forward refs.
-# Let's ensure Comment class is aware of 'ai_edits' attribute.
-# The previous `Comment.ai_edits = Relationship(...)` is one way.
-# Another is to declare it in the class with proper type hints if possible,
-# or ensure SQLModel.model_rebuild() is effectively called.
-
-# For forward references like "Comment" in AICommentEdit, and potentially AICommentEdit in Comment,
-# SQLModel (via Pydantic) generally handles them if they are string literals.
-# If issues arise, calling SomeModel.model_rebuild() explicitly after all definitions can help.
-# However, the current structure where all models are imported before metadata.create_all()
-# is usually sufficient.
+# Update User model to link to AIEnhancementLog if needed for querying user's AI interactions
+# For now, not adding back_populates on User for AIEnhancementLog to keep it simple.
 
 # Final check on relationships:
 # User.comments (List["Comment"]) -> Comment.author (User)
 # Video.comments (List["Comment"]) -> Comment.video (Video)
 # Comment.replies (List["Comment"]) -> Comment.parent (Optional["Comment"])
-# Comment.ai_edits (List["AICommentEdit"]) -> AICommentEdit.comment ("Comment") - This was set using Comment.ai_edits = ...
-# AICommentEdit.user (User) - This is a simple Relationship, no back_populates on User from AICommentEdit specified.
+# Comment.enhancement_logs (List["AIEnhancementLog"]) -> AIEnhancementLog.comment ("Comment")
+# AIEnhancementLog.user (User) - This is a simple Relationship.
 
 # To ensure all relationships and forward references are correctly processed by Pydantic/SQLModel:
-# Call model_rebuild for models with forward string references if not automatically handled.
-# Usually not needed if all models are defined/imported before use (e.g. table creation or schema generation).
 User.model_rebuild()
 Video.model_rebuild()
-Comment.model_rebuild()
-AICommentEdit.model_rebuild()
+# Comment model needs to be rebuilt AFTER AIEnhancementLog is defined if it type-hints it.
+AIEnhancementLog.model_rebuild()
+Comment.model_rebuild() # Rebuild Comment last as it refers to AIEnhancementLog
 
 # Update the create_db_and_tables function in database.py to use these models
 # This is a conceptual note; I'll modify database.py in a separate step if needed,

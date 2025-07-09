@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session as SQLModelSession, select
 from unittest.mock import patch
 
-from src.models import User, Video, Comment, AICommentEdit
+from src.models import User, Video, Comment, AIEnhancementLog # Updated import
 from tests.integration.conftest import create_test_user, get_auth_headers_for_user
 
 # --- Test Data ---
@@ -86,15 +86,15 @@ def test_enhance_comment_happy_path(mock_enhance_fn, client: TestClient, ai_test
     assert data["original_text"] == ai_test_comment.original_text
     assert data["suggested_enhanced_text"] == "This is the AI enhanced version of the comment."
     assert data["status"] == "suggested"
-    suggestion_id = data["suggestion_id"]
+    log_id = data["suggestion_id"] # This key in EnhanceCommentResponse should be updated to log_id if schema changes
 
-    # Verify AICommentEdit record was created
-    ai_edit_record = db_session.get(AICommentEdit, suggestion_id)
-    assert ai_edit_record is not None
-    assert ai_edit_record.comment_id == comment_id
-    assert ai_edit_record.raw_comment_text_before_ai == ai_test_comment.original_text
-    assert ai_edit_record.ai_generated_text == "This is the AI enhanced version of the comment."
-    assert ai_edit_record.status == "suggested"
+    # Verify AIEnhancementLog record was created
+    log_record = db_session.get(AIEnhancementLog, log_id) # Use new model name
+    assert log_record is not None
+    assert log_record.comment_id == comment_id
+    assert log_record.raw_comment_text_before_ai == ai_test_comment.original_text
+    assert log_record.ai_generated_text == "This is the AI enhanced version of the comment."
+    assert log_record.status == "suggested"
     mock_enhance_fn.assert_called_once_with(ai_test_comment.original_text, user_prompt_template=None)
 
 
@@ -108,17 +108,16 @@ def test_enhance_comment_ai_service_failure(mock_enhance_fn, client: TestClient,
     assert response.status_code == 503 # Service Unavailable
     assert "AI enhancement service failed or content was blocked" in response.json()["detail"]
 
-    # Verify AICommentEdit record was created with 'api_error' status
-    # Need to find the record as we don't get suggestion_id from a 503 response.
-    # This requires querying.
-    ai_edit_records = db_session.exec(
-        select(AICommentEdit).where(AICommentEdit.comment_id == comment_id).order_by(AICommentEdit.api_call_timestamp.desc())
+    # Verify AIEnhancementLog record was created with 'api_error' status
+    # Need to find the record as we don't get log_id from a 503 response.
+    log_records = db_session.exec(
+        select(AIEnhancementLog).where(AIEnhancementLog.comment_id == comment_id).order_by(AIEnhancementLog.api_call_timestamp.desc())
     ).all()
-    assert len(ai_edit_records) > 0
-    latest_ai_edit_record = ai_edit_records[0]
-    assert latest_ai_edit_record.status == "api_error"
-    assert latest_ai_edit_record.raw_comment_text_before_ai == ai_test_comment.original_text
-    assert latest_ai_edit_record.ai_generated_text == "" # Stored as empty if None from AI
+    assert len(log_records) > 0
+    latest_log_record = log_records[0]
+    assert latest_log_record.status == "api_error"
+    assert latest_log_record.raw_comment_text_before_ai == ai_test_comment.original_text
+    assert latest_log_record.ai_generated_text == "" # Stored as empty if None from AI
 
 def test_enhance_comment_not_author(client: TestClient, ai_test_comment: Comment, db_session: SQLModelSession):
     # Create another user
@@ -140,22 +139,22 @@ def test_review_suggestion_accept_as_is(mock_enhance_fn, client: TestClient, ai_
     # 1. Get a suggestion
     enhance_resp = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
     enhance_resp.raise_for_status()
-    suggestion_id = enhance_resp.json()["suggestion_id"]
+    log_id = enhance_resp.json()["log_id"] # Updated key name
 
     # 2. Review: Accept as is
     review_data = {"action": "accept_as_is"}
-    review_resp = client.put(f"/ai-suggestions/{suggestion_id}/review", json=review_data, headers=ai_test_user_auth_headers)
+    review_resp = client.put(f"/ai-enhancement-logs/{log_id}/review", json=review_data, headers=ai_test_user_auth_headers) # Updated path
     assert review_resp.status_code == 200, f"Review failed: {review_resp.text}"
 
     updated_comment_data = review_resp.json()
     assert updated_comment_data["comment_id"] == ai_test_comment.comment_id
     assert updated_comment_data["displayed_text"] == ai_suggestion_text
     assert updated_comment_data["is_ai_assisted"] == True
-    assert updated_comment_data["original_text"] == ai_test_comment.original_text # Original is preserved
+    assert updated_comment_data["original_text"] == ai_test_comment.original_text
 
-    # Verify AICommentEdit status
-    ai_edit_record = db_session.get(AICommentEdit, suggestion_id)
-    assert ai_edit_record.status == "accepted_as_is"
+    # Verify AIEnhancementLog status
+    log_record = db_session.get(AIEnhancementLog, log_id) # Updated model name
+    assert log_record.status == "accepted_as_is"
 
 
 @patch('src.ai_services.enhance_comment_with_ai')
@@ -163,20 +162,20 @@ def test_review_suggestion_edit_and_accept(mock_enhance_fn, client: TestClient, 
     mock_enhance_fn.return_value = "AI suggested this, but user will edit."
     enhance_resp = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
     enhance_resp.raise_for_status()
-    suggestion_id = enhance_resp.json()["suggestion_id"]
+    log_id = enhance_resp.json()["log_id"] # Updated key name
 
     user_edited_text = "User's final edited version of AI suggestion."
     review_data = {"action": "edit_and_accept", "edited_text": user_edited_text}
-    review_resp = client.put(f"/ai-suggestions/{suggestion_id}/review", json=review_data, headers=ai_test_user_auth_headers)
+    review_resp = client.put(f"/ai-enhancement-logs/{log_id}/review", json=review_data, headers=ai_test_user_auth_headers) # Updated path
     assert review_resp.status_code == 200, f"Review (edit_and_accept) failed: {review_resp.text}"
 
     updated_comment_data = review_resp.json()
     assert updated_comment_data["displayed_text"] == user_edited_text
     assert updated_comment_data["is_ai_assisted"] == True
 
-    ai_edit_record = db_session.get(AICommentEdit, suggestion_id)
-    assert ai_edit_record.status == "edited_and_accepted"
-    assert ai_edit_record.user_final_edited_text == user_edited_text
+    log_record = db_session.get(AIEnhancementLog, log_id) # Updated model name
+    assert log_record.status == "edited_and_accepted"
+    assert log_record.user_final_edited_text == user_edited_text
 
 
 @patch('src.ai_services.enhance_comment_with_ai')
@@ -184,32 +183,30 @@ def test_review_suggestion_reject(mock_enhance_fn, client: TestClient, ai_test_u
     mock_enhance_fn.return_value = "A suggestion that will be rejected."
     enhance_resp = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
     enhance_resp.raise_for_status()
-    suggestion_id = enhance_resp.json()["suggestion_id"]
+    log_id_1 = enhance_resp.json()["log_id"] # Use updated key "log_id"
 
     # First, accept a suggestion to make is_ai_assisted = True
-    client.put(f"/ai-suggestions/{suggestion_id}/review", json={"action": "accept_as_is"}, headers=ai_test_user_auth_headers).raise_for_status()
+    client.put(f"/ai-enhancement-logs/{log_id_1}/review", json={"action": "accept_as_is"}, headers=ai_test_user_auth_headers).raise_for_status() # Use updated path
 
     # Now, get another suggestion for the same comment
     mock_enhance_fn.return_value = "A newer suggestion to be rejected."
     enhance_resp_2 = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
     enhance_resp_2.raise_for_status()
-    suggestion_id_2 = enhance_resp_2.json()["suggestion_id"]
+    log_id_2 = enhance_resp_2.json()["log_id"] # Use updated key "log_id"
 
 
     # Review: Reject the newer suggestion
     review_data = {"action": "reject"}
-    review_resp = client.put(f"/ai-suggestions/{suggestion_id_2}/review", json=review_data, headers=ai_test_user_auth_headers)
+    review_resp = client.put(f"/ai-enhancement-logs/{log_id_2}/review", json=review_data, headers=ai_test_user_auth_headers) # Use updated path
     assert review_resp.status_code == 200, f"Review (reject) failed: {review_resp.text}"
 
     updated_comment_data = review_resp.json()
-    # When rejected, displayed_text should revert to original_text if it was previously AI assisted
     assert updated_comment_data["displayed_text"] == ai_test_comment.original_text
     assert updated_comment_data["is_ai_assisted"] == False
 
-    ai_edit_record = db_session.get(AICommentEdit, suggestion_id_2)
-    assert ai_edit_record.status == "rejected"
+    log_record_2 = db_session.get(AIEnhancementLog, log_id_2) # Use updated model name
+    assert log_record_2.status == "rejected"
 
-    # Original comment should reflect the rejection
     final_comment_state = db_session.get(Comment, ai_test_comment.comment_id)
     assert final_comment_state.displayed_text == ai_test_comment.original_text
     assert final_comment_state.is_ai_assisted == False
@@ -219,15 +216,15 @@ def test_review_suggestion_already_actioned(mock_enhance_fn, client: TestClient,
     mock_enhance_fn.return_value = "Suggestion."
     enhance_resp = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
     enhance_resp.raise_for_status()
-    suggestion_id = enhance_resp.json()["suggestion_id"]
+    log_id = enhance_resp.json()["log_id"] # Use updated key "log_id"
 
     # Action it once
-    client.put(f"/ai-suggestions/{suggestion_id}/review", json={"action": "accept_as_is"}, headers=ai_test_user_auth_headers).raise_for_status()
+    client.put(f"/ai-enhancement-logs/{log_id}/review", json={"action": "accept_as_is"}, headers=ai_test_user_auth_headers).raise_for_status() # Use updated path
 
     # Try to action it again
     review_data = {"action": "reject"}
-    review_resp_again = client.put(f"/ai-suggestions/{suggestion_id}/review", json=review_data, headers=ai_test_user_auth_headers)
-    assert review_resp_again.status_code == 400 # Bad Request
+    review_resp_again = client.put(f"/ai-enhancement-logs/{log_id}/review", json=review_data, headers=ai_test_user_auth_headers) # Use updated path
+    assert review_resp_again.status_code == 400
     assert "already been actioned" in review_resp_again.json()["detail"]
 
 # Add tests for edge input content (empty comment, long comment, special chars) for /enhance endpoint
@@ -249,6 +246,41 @@ def test_review_suggestion_already_actioned(mock_enhance_fn, client: TestClient,
 # - This is tested in test_enhance_comment_ai_service_failure.
 
 # Test for permissions (already have test_enhance_comment_not_author, test_review_suggestion_not_author (implicitly via comment ownership))
+
+
+# --- Length Validation Tests for Review Endpoint ---
+@patch('src.ai_services.enhance_comment_with_ai')
+@patch('src.config.settings.MAX_COMMENT_LENGTH', 50) # Temporarily set short max length for test
+def test_review_suggestion_accept_as_is_exceeds_max_length(mock_enhance_fn, client: TestClient, ai_test_user_auth_headers: dict, ai_test_comment: Comment):
+    ai_long_suggestion = "This is an AI suggestion that is definitely going to be longer than fifty characters."
+    mock_enhance_fn.return_value = ai_long_suggestion # Configure mock to return long text
+
+    enhance_resp = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
+    enhance_resp.raise_for_status()
+    log_id = enhance_resp.json()["log_id"]
+
+    review_data = {"action": "accept_as_is"}
+    review_resp = client.put(f"/ai-enhancement-logs/{log_id}/review", json=review_data, headers=ai_test_user_auth_headers)
+
+    assert review_resp.status_code == 400
+    assert "exceeds maximum comment length of 50 characters" in review_resp.json()["detail"]
+
+@patch('src.ai_services.enhance_comment_with_ai')
+@patch('src.config.settings.MAX_COMMENT_LENGTH', 50) # Temporarily set short max length
+def test_review_suggestion_edit_and_accept_exceeds_max_length(mock_enhance_fn, client: TestClient, ai_test_user_auth_headers: dict, ai_test_comment: Comment):
+    mock_enhance_fn.return_value = "Short AI suggestion." # Original AI suggestion is short
+
+    enhance_resp = client.post(f"/comments/{ai_test_comment.comment_id}/enhance", headers=ai_test_user_auth_headers)
+    enhance_resp.raise_for_status()
+    log_id = enhance_resp.json()["log_id"]
+
+    user_long_edited_text = "User edits the comment to be extremely long, far beyond the fifty character limit imposed for this test."
+    review_data = {"action": "edit_and_accept", "edited_text": user_long_edited_text}
+    review_resp = client.put(f"/ai-enhancement-logs/{log_id}/review", json=review_data, headers=ai_test_user_auth_headers)
+
+    assert review_resp.status_code == 400
+    assert "exceeds maximum comment length of 50 characters" in review_resp.json()["detail"]
+
 
 # Test for long comment / special chars
 @patch('src.ai_services.enhance_comment_with_ai')

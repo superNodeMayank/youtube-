@@ -63,6 +63,7 @@ This project implements an AI-assisted comment enhancement feature for a YouTube
         *   `ALGORITHM`: JWT algorithm (default is `HS256`).
         *   `ACCESS_TOKEN_EXPIRE_MINUTES`: JWT token expiry time.
         *   `GEMINI_API_KEY`: Your Google Gemini API key. This is required for the AI enhancement features to work. Obtain this from [Google AI Studio](https://aistudio.google.com/).
+        *   `MAX_COMMENT_LENGTH`: Maximum allowed character length for comments (default: 5000). Used to validate AI suggestions and user edits.
 
 5.  **Run the application:**
     ```bash

@@ -144,64 +144,61 @@ def update_comment_text(db: Session, comment_id: int, new_text: str, user_id: in
         return db_comment
     return None
 
-# --- AICommentEdit CRUD ---
+# --- AIEnhancementLog CRUD ---
 
-def create_ai_comment_edit(db: Session, ai_edit_data: schemas.AICommentEditDBInput) -> models.AICommentEdit:
+def create_ai_enhancement_log(db: Session, log_data: schemas.AIEnhancementLogDBInput) -> models.AIEnhancementLog:
     """
     Creates a record of an AI enhancement attempt/result.
     """
     # Ensure the associated comment exists
-    comment = get_comment(db, ai_edit_data.comment_id)
+    comment = get_comment(db, log_data.comment_id)
     if not comment:
-        raise ValueError(f"Comment with id {ai_edit_data.comment_id} not found for AI edit record.")
+        raise ValueError(f"Comment with id {log_data.comment_id} not found for AI enhancement log.")
 
-    # Ensure the user_id in ai_edit_data matches the comment's author,
-    # or handle based on specific logic (e.g., if a moderator can trigger AI edit).
-    # For now, assume user_id in AICommentEditDBInput is the comment author.
-    if comment.user_id != ai_edit_data.user_id:
-        # This might be a strict check; adjust if other users can initiate AI edits for a comment.
-        raise ValueError(f"User ID {ai_edit_data.user_id} does not match comment author ID {comment.user_id}.")
+    # Ensure the user_id in log_data matches the comment's author.
+    if comment.user_id != log_data.user_id:
+        raise ValueError(f"User ID {log_data.user_id} does not match comment author ID {comment.user_id}.")
 
-    db_ai_edit = models.AICommentEdit.model_validate(ai_edit_data)
-    db.add(db_ai_edit)
+    db_log_entry = models.AIEnhancementLog.model_validate(log_data)
+    db.add(db_log_entry)
     db.commit()
-    db.refresh(db_ai_edit)
-    return db_ai_edit
+    db.refresh(db_log_entry)
+    return db_log_entry
 
-def get_ai_comment_edit(db: Session, edit_id: int) -> Optional[models.AICommentEdit]:
-    return db.get(models.AICommentEdit, edit_id)
+def get_ai_enhancement_log(db: Session, log_id: int) -> Optional[models.AIEnhancementLog]:
+    return db.get(models.AIEnhancementLog, log_id)
 
-def get_latest_ai_suggestion_for_comment(db: Session, comment_id: int) -> Optional[models.AICommentEdit]:
+def get_latest_ai_suggestion_for_comment(db: Session, comment_id: int) -> Optional[models.AIEnhancementLog]:
     """
-    Retrieves the most recent 'suggested' AI edit for a comment.
+    Retrieves the most recent 'suggested' AI enhancement log for a comment.
     """
     statement = (
-        select(models.AICommentEdit)
-        .where(models.AICommentEdit.comment_id == comment_id)
-        .where(models.AICommentEdit.status == "suggested") # Or whatever the initial status is
-        .order_by(models.AICommentEdit.api_call_timestamp.desc())
+        select(models.AIEnhancementLog)
+        .where(models.AIEnhancementLog.comment_id == comment_id)
+        .where(models.AIEnhancementLog.status == "suggested")
+        .order_by(models.AIEnhancementLog.api_call_timestamp.desc())
     )
     return db.exec(statement).first()
 
-def update_ai_comment_edit_status(
+def update_ai_enhancement_log_status(
     db: Session,
-    edit_id: int,
+    log_id: int,
     status: str,
     user_final_text: Optional[str] = None
-) -> Optional[models.AICommentEdit]:
+) -> Optional[models.AIEnhancementLog]:
     """
-    Updates the status of an AICommentEdit record (e.g., 'accepted', 'rejected', 'edited_and_accepted').
+    Updates the status of an AIEnhancementLog record.
     Optionally updates the user_final_edited_text.
     """
-    db_ai_edit = db.get(models.AICommentEdit, edit_id)
-    if db_ai_edit:
-        db_ai_edit.status = status
+    db_log_entry = db.get(models.AIEnhancementLog, log_id)
+    if db_log_entry:
+        db_log_entry.status = status
         if user_final_text is not None:
-            db_ai_edit.user_final_edited_text = user_final_text
-        db.add(db_ai_edit)
+            db_log_entry.user_final_edited_text = user_final_text
+        db.add(db_log_entry)
         db.commit()
-        db.refresh(db_ai_edit)
-        return db_ai_edit
+        db.refresh(db_log_entry)
+        return db_log_entry
     return None
 
 def delete_comment(db: Session, comment_id: int, user_id: int) -> Optional[models.Comment]:

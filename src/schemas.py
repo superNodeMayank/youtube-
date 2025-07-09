@@ -36,21 +36,20 @@ class CommentReadAPI(SQLModelCommentRead): # API returns this
 # This is needed for Pydantic to correctly process the self-referencing `replies` field.
 CommentReadAPI.model_rebuild()
 
-# --- Schemas for AICommentEdit ---
-from src.models import AICommentEditBase # Import base class
+# --- Schemas for AIEnhancementLog ---
+from src.models import AIEnhancementLogBase # Import base class
 
-class AICommentEditRead(AICommentEditBase):
-    edit_id: int
+class AIEnhancementLogRead(AIEnhancementLogBase):
+    log_id: int # Renamed from edit_id
     comment_id: int
-    user_id: int # User who authored the original comment / initiated AI edit
+    user_id: int # User who authored the original comment
     api_call_timestamp: datetime
     # Could optionally include nested UserRead for the user_id
 
-class AICommentEditCreateBody(AICommentEditBase): # What client sends to create a record (usually internal)
-    # comment_id and user_id will be from path/context
+class AIEnhancementLogCreateBody(AIEnhancementLogBase): # What client sends (likely not directly used by client)
     pass
 
-class AICommentEditDBInput(AICommentEditBase): # What CRUD receives to create in DB
+class AIEnhancementLogDBInput(AIEnhancementLogBase): # What CRUD receives to create in DB
     comment_id: int
     user_id: int
 
@@ -82,7 +81,7 @@ class EnhanceCommentRequest(BaseModel):
     prompt_template: Optional[str] = Field(None, example="Make this comment funnier: {comment}")
 
 class EnhanceCommentResponse(BaseModel):
-    suggestion_id: int # This is the ai_comment_edits.edit_id
+    log_id: int # Renamed from suggestion_id, reflects AIEnhancementLog.log_id
     comment_id: int
     original_text: str # The text that was sent for enhancement (comment.original_text)
     suggested_enhanced_text: str
