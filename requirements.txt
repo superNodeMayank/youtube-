@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+psycopg2-binary # For potential future PostgreSQL use, good to list early
+python-dotenv # For managing environment variables
+passlib[bcrypt] # For password hashing
+python-jose[cryptography] # For JWT tokens (authentication)
+google-generativeai # For Gemini API
